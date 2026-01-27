@@ -160,3 +160,4 @@ const Details = ({ feedback }: { feedback: Feedback }) => {
 };
 
 export default Details;
+
