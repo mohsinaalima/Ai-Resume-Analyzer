@@ -1,4 +1,3 @@
-// app/routes/upload.tsx
 import { type FormEvent, useState } from "react";
 import Navbar from "~/components/Navbar";
 import FileUploader from "~/components/FileUploader";
@@ -20,37 +19,53 @@ const Upload = () => {
     jobTitle,
     jobDescription,
     file,
-  }: {
-    companyName: string;
-    jobTitle: string;
-    jobDescription: string;
-    file: File;
-  }) => {
+  }: any) => {
     setIsProcessing(true);
-
     try {
-      setStatusText("Uploading the file...");
-      // Puter returns an array; grab the first item
-      const uploadResults = await fs.upload([file]);
-      const uploadedFile = Array.isArray(uploadResults)
-        ? uploadResults[0]
-        : uploadResults;
-      if (!uploadedFile?.path) throw new Error("Failed to get upload path");
+      setStatusText("Uploading original resume...");
+      const pdfUpload = await fs.upload([file]);
+      const uploadedFile = Array.isArray(pdfUpload) ? pdfUpload[0] : pdfUpload;
 
-      setStatusText("Converting to image...");
-      const imageFile = await convertPdfToImage(file);
-      if (imageFile.error || !imageFile.file) {
-        throw new Error(imageFile.error || "Failed to convert PDF to image");
+      setStatusText("Converting to image for AI...");
+      const imageResult = await convertPdfToImage(file);
+      if (imageResult.error || !imageResult.file)
+        throw new Error(imageResult.error);
+
+      setStatusText("Finalizing image upload...");
+      const imgUpload = await fs.upload([imageResult.file]);
+      const uploadedImage = Array.isArray(imgUpload) ? imgUpload[0] : imgUpload;
+
+      setStatusText("Analyzing with AI... (this may take a moment)");
+      const feedback = await ai.feedback(
+        uploadedFile.path,
+        prepareInstructions({ jobTitle, jobDescription }),
+      );
+
+      if (!feedback) throw new Error("AI failed to respond.");
+
+      // Extract text content from the AI response 🤖
+      const feedbackText =
+        typeof feedback.message.content === "string"
+          ? feedback.message.content
+          : feedback.message.content[0].text;
+
+      // upload.tsx logic around line 55
+
+      // 1. Log the response so we can see why it's apologizing 🕵️‍♂️
+      console.log("RAW AI RESPONSE:", feedbackText);
+
+      // 2. Use a Regex to find the JSON block (everything between { and })
+      const jsonMatch = feedbackText.match(/\{[\s\S]*\}/);
+
+      if (!jsonMatch) {
+        throw new Error(
+          "The AI didn't provide a score. It said: " + feedbackText,
+        );
       }
 
-      setStatusText("Uploading the image...");
-      const imageUploadResults = await fs.upload([imageFile.file]);
-      const uploadedImage = Array.isArray(imageUploadResults)
-        ? imageUploadResults[0]
-        : imageUploadResults;
-      if (!uploadedImage?.path) throw new Error("Failed to upload image");
+      // 3. Parse ONLY the matched JSON
+      const parsedFeedback = JSON.parse(jsonMatch[0]);
 
-      setStatusText("Preparing data...");
       const uuid = generateUUID();
       const data = {
         id: uuid,
@@ -59,33 +74,17 @@ const Upload = () => {
         companyName,
         jobTitle,
         jobDescription,
-        feedback: null, // Initialize as null
+        feedback: parsedFeedback, // Use the cleaned data
       };
 
-      setStatusText("Analyzing...");
-      const feedback = await ai.feedback(
-        uploadedFile.path,
-        prepareInstructions({ jobTitle, jobDescription }),
-      );
-
-      if (!feedback) throw new Error("AI returned no results");
-
-      const feedbackText =
-        typeof feedback.message.content === "string"
-          ? feedback.message.content
-          : feedback.message.content[0].text;
-
-      data.feedback = JSON.parse(feedbackText);
-
-      // Save full data with feedback to KV
       await kv.set(`resume:${uuid}`, JSON.stringify(data));
 
-      setStatusText("Complete! Redirecting...");
+      setStatusText("Success! Redirecting...");
       navigate(`/resume/${uuid}`);
     } catch (err) {
-      console.error("Analysis Error:", err);
+      console.error("Critical Error:", err);
       setStatusText(
-        `Error: ${err instanceof Error ? err.message : String(err)}`,
+        `Error: ${err instanceof Error ? err.message : "Something went wrong"}`,
       );
       setIsProcessing(false);
     }
@@ -94,83 +93,78 @@ const Upload = () => {
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const companyName = formData.get("company-name") as string;
-    const jobTitle = formData.get("job-title") as string;
-    const jobDescription = formData.get("job-description") as string;
-
-    if (!file) return;
-    handleAnalyze({ companyName, jobTitle, jobDescription, file });
+    if (file)
+      handleAnalyze({
+        companyName: formData.get("company-name"),
+        jobTitle: formData.get("job-title"),
+        jobDescription: formData.get("job-description"),
+        file,
+      });
   };
 
   return (
-    <main className="bg-[url('/images/bg-main.svg')] bg-cover">
+    <main className="bg-[url('/images/bg-main.svg')] bg-cover min-h-screen">
       <Navbar />
       <section className='main-section'>
         <div className='page-heading py-16'>
           <h1>Smart feedback for your dream job</h1>
           {isProcessing ? (
-            <>
+            <div className='flex flex-col items-center gap-4'>
               <h2>{statusText}</h2>
               <img
                 src='/images/resume-scan.gif'
-                className='w-full'
-                alt='Scanning...'
+                className='w-full max-w-md mx-auto'
+                alt='Processing...'
               />
-            </>
+            </div>
           ) : (
-            <>
-              <h2>Drop your resume for an ATS score and improvement tips</h2>
-              <form
-                id='upload-form'
-                onSubmit={handleSubmit}
-                className='flex flex-col gap-4 mt-8'
+            <form
+              onSubmit={handleSubmit}
+              className='flex flex-col gap-4 mt-8 max-w-xl mx-auto'
+            >
+              <div className='form-div'>
+                <label>Company Name</label>
+                <input
+                  type='text'
+                  name='company-name'
+                  placeholder='Google'
+                  required
+                />
+              </div>
+              <div className='form-div'>
+                <label>Job Title</label>
+                <input
+                  type='text'
+                  name='job-title'
+                  placeholder='Frontend Developer'
+                  required
+                />
+              </div>
+              <div className='form-div'>
+                <label>Job Description</label>
+                <textarea
+                  rows={5}
+                  name='job-description'
+                  placeholder='Paste requirements here...'
+                />
+              </div>
+              <div className='form-div'>
+                <label>Resume (PDF)</label>
+                <FileUploader onFileSelect={setFile} />
+              </div>
+              <button
+                className='primary-button mt-4'
+                type='submit'
+                disabled={!file}
               >
-                <div className='form-div'>
-                  <label htmlFor='company-name'>Company Name</label>
-                  <input
-                    type='text'
-                    name='company-name'
-                    placeholder='Google'
-                    id='company-name'
-                    required
-                  />
-                </div>
-                <div className='form-div'>
-                  <label htmlFor='job-title'>Job Title</label>
-                  <input
-                    type='text'
-                    name='job-title'
-                    placeholder='Frontend Developer'
-                    id='job-title'
-                    required
-                  />
-                </div>
-                <div className='form-div'>
-                  <label htmlFor='job-description'>Job Description</label>
-                  <textarea
-                    rows={5}
-                    name='job-description'
-                    placeholder='Paste job details here...'
-                    id='job-description'
-                  />
-                </div>
-                <div className='form-div'>
-                  <label htmlFor='uploader'>Upload Resume</label>
-                  <FileUploader onFileSelect={setFile} />
-                </div>
-                <button
-                  className='primary-button'
-                  type='submit'
-                  disabled={!file}
-                >
-                  Analyze Resume
-                </button>
-              </form>
-            </>
+                Analyze Resume
+              </button>
+            </form>
           )}
         </div>
       </section>
     </main>
   );
 };
+
 export default Upload;

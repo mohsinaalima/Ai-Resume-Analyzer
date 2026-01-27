@@ -330,6 +330,8 @@ export const usePuterStore = create<PuterStore>((set, get) => {
   // puter.ts
 
   // ... find this function inside usePuterStore ...
+  // puter.ts inside usePuterStore
+
   const feedback = async (path: string, message: string) => {
     const puter = getPuter();
     if (!puter) {
@@ -337,25 +339,25 @@ export const usePuterStore = create<PuterStore>((set, get) => {
       return;
     }
 
-    return puter.ai.chat(
-      [
-        {
-          role: "user",
-          content: [
-            {
-              type: "file",
-              puter_path: path,
-            },
-            {
-              type: "text",
-              text: message,
-            },
-          ],
-        },
-      ],
-      // CHANGE THIS LINE:
-      { model: "gpt-4o" },
-    ) as Promise<AIResponse | undefined>;
+    try {
+      // 1. Read the file content from the path 📄
+      const fileBlob = await puter.fs.read(path);
+      const resumeText = await fileBlob.text();
+
+      // 2. Send the actual text to the AI instead of just the path 🤖
+      return (await puter.ai.chat(
+        [
+          {
+            role: "user",
+            content: `Here is the resume content: \n\n ${resumeText} \n\n ${message}`,
+          },
+        ],
+        { model: "gpt-4o" },
+      )) as AIResponse | undefined;
+    } catch (err) {
+      setError("Failed to read resume content for analysis");
+      return undefined;
+    }
   };
 
   const img2txt = async (image: string | File | Blob, testMode?: boolean) => {
